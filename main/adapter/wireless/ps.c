@@ -12,6 +12,7 @@
 #include "tests/cmds.h"
 #include "bluetooth/mon.h"
 #include "ps.h"
+#include "system/ui.h"
 
 enum {
     PS4_S = 4,
@@ -103,8 +104,69 @@ static const uint32_t ps4_btns_mask[32] = {
     0, BIT(PS4_R1), 0, BIT(PS4_R3),
 };
 
+
+/*
+ * Forward the latest DS4 Bluetooth touch sample to the local OLED UI.
+ * HIDP passes the 77-byte payload after the report ID byte.
+ */
+static void ps4_touch_to_ui(struct bt_data *bt_data, struct ps4_map *map) {
+    const uint8_t *data = bt_data->base.input;
+    uint32_t len = bt_data->base.input_len;
+    uint8_t valid = 0;
+    uint8_t down = 0;
+    uint16_t x = 0;
+    uint16_t y = 0;
+
+    /* Use the parser's actual DS4 touchpad-click bit. */
+    uint8_t click = (map->buttons & (1UL << PS4_TP)) != 0;
+
+    /*
+     * Bluetooth payload excludes report ID 0x11.
+     * Touch count: data[34].
+     * Touch samples: 9 bytes each, starting at data[35].
+     * Each sample has a timestamp followed by two 4-byte contacts.
+     */
+    if (data != NULL && len >= 77) {
+        uint8_t reports = data[34];
+
+        /* Fall back to the first sample if the count is unusable. */
+        if (reports == 0 || reports > 4) {
+            reports = 1;
+        }
+
+        uint32_t point = 36U + ((uint32_t)reports - 1U) * 9U;
+
+        if (point + 8U <= len) {
+            valid = 1;
+
+            /* Use contact 2 if contact 1 is inactive. */
+            uint32_t contact = point;
+            if (data[contact] & 0x80) {
+                contact = point + 4U;
+            }
+
+            /* If both contacts are inactive, down stays zero. */
+            if (!(data[contact] & 0x80)) {
+                down = 1;
+                x = (uint16_t)data[contact + 1]
+                    | ((uint16_t)(data[contact + 2] & 0x0F) << 8);
+                y = (uint16_t)(data[contact + 2] >> 4)
+                    | ((uint16_t)data[contact + 3] << 4);
+
+                if (x > 1919 || y > 941) {
+                    valid = 0;
+                    down = 0;
+                }
+            }
+        }
+    }
+
+    ui_touch_feed(valid, down, x, y, click);
+}
+
 static void ps4_to_generic(struct bt_data *bt_data, struct wireless_ctrl *ctrl_data) {
     struct ps4_map *map = (struct ps4_map *)bt_data->base.input;
+    ps4_touch_to_ui(bt_data, map);
     struct ctrl_meta *meta = bt_data->raw_src_mappings[PAD].meta;
 
     TESTS_CMDS_LOG("\"wireless_input\": {\"report_id\": %ld, \"axes\": [%u, %u, %u, %u, %u, %u], \"btns\": %lu, \"hat\": %u},\n",

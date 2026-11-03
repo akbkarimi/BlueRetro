@@ -4,6 +4,7 @@
  */
 
 #include <stdio.h>
+#include "system/ui.h"
 #include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -267,12 +268,14 @@ static void set_leds_as_btn_status(uint8_t state) {
     }
 
     /* Use error LED as well */
+#ifndef CONFIG_BLUERETRO_SYSTEM_PSX_PS2 /* PS2 build: this pin is the OLED SCL (see ui.c) */
     if (state) {
         esp_rom_gpio_connect_out_signal(err_led_pin, ledc_sig_out_idx(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1), 0, 0);
     }
     else {
         esp_rom_gpio_connect_out_signal(err_led_pin, ledc_sig_out_idx(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0), 0, 0);
     }
+#endif
 }
 
 static void power_on_hdl(void) {
@@ -328,6 +331,7 @@ static void wired_port_hdl(void) {
     uint32_t update = 0;
     uint16_t port_mask = 0;
     uint8_t err_led_set = 0;
+    uint8_t pads_ready = 0;
 
     for (int32_t i = 0, j = 0, idx = 0; i < BT_MAX_DEV; i++) {
         struct bt_dev *device = NULL;
@@ -345,6 +349,9 @@ static void wired_port_hdl(void) {
         }
 
         bt_ready = atomic_test_bit(&device->flags, BT_DEV_HID_INIT_DONE);
+        if (bt_ready) {
+            pads_ready++;
+        }
 
 #ifdef CONFIG_BLUERETRO_HW2
         int32_t prev_idx = device->ids.out_idx;
@@ -392,6 +399,14 @@ static void wired_port_hdl(void) {
             }
         }
 #endif
+    }
+    {
+        static uint8_t last_pads = 0xFF;
+
+        if (pads_ready != last_pads) {
+            last_pads = pads_ready;
+            ui_set_pads(pads_ready);
+        }
     }
     if (hw_config.hotplug) {
         if (port_state != port_mask) {

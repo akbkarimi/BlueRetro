@@ -11,6 +11,7 @@
 #include "driver/ledc.h"
 #include "adapter/config.h"
 #include "led.h"
+#include "system/ui.h"
 
 #ifdef CONFIG_BLUERETRO_HW_IBLUECONTROL
 #define ERR_LED_PIN 12
@@ -84,12 +85,14 @@ void err_led_cfg_update(void) {
 }
 
 void err_led_set(void) {
+    ui_event(UI_EVT_ERROR);
     vTaskSuspend(err_led_task_hdl);
     ledc_set_duty_and_update(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, hw_config.led_pulse_on_duty_cycle, 0);
     atomic_set_bit(&led_flags, ERR_LED_SET);
 }
 
 void err_led_clear(void) {
+    ui_event(UI_EVT_PAIRING_STOP);
     /* When error is set it stay on until power cycle */
     if (!atomic_test_bit(&led_flags, ERR_LED_SET)) {
         vTaskSuspend(err_led_task_hdl);
@@ -98,6 +101,7 @@ void err_led_clear(void) {
 }
 
 void err_led_pulse(void) {
+    ui_event(UI_EVT_PAIRING_START);
     vTaskResume(err_led_task_hdl);
 }
 

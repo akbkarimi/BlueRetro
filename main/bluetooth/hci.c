@@ -18,6 +18,7 @@
 #include "smp.h"
 #include "tools/util.h"
 #include "system/led.h"
+#include "system/ui.h"
 #include "adapter/config.h"
 #include "wired/wired_bare.h"
 #include "zephyr/uuid.h"
@@ -1654,6 +1655,8 @@ void bt_hci_evt_hdlr(struct bt_hci_pkt *bt_hci_evt_pkt) {
                 if (device && disconn_complete->handle == device->acl_handle) {
                     printf("# DISCONN from BLE config interface\n");
                     if (atomic_test_bit(&device->flags, BT_DEV_DEVICE_FOUND)) {
+                        /* Stop settings-interface preview on BLE disconnect. */
+                        ui_audio_preview_disconnect();
                         /* bt_host_reset_dev() only resets entries within bt_dev[] and
                          * returns early for bt_dev_conf, so its flags would never be
                          * cleared and the config interface could not reconnect.

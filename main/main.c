@@ -4,6 +4,7 @@
  */
 
 #include <string.h>
+#include "system/ui.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs_flash.h>
@@ -91,6 +92,7 @@ static void wl_init_task(void *arg) {
 #endif
 
     err_led_init(chip_package);
+    ui_init();
 
     core0_stall_init();
 
