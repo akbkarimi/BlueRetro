@@ -5,6 +5,7 @@
 
 #include <string.h>
 #include "system/ui.h"
+#include "system/mx_config.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs_flash.h>
@@ -111,6 +112,7 @@ static void wl_init_task(void *arg) {
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+    mx_config_init();
 
     config_init(DEFAULT_CFG);
     mc_init_mem();

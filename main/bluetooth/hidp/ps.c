@@ -123,7 +123,7 @@ static void bt_hid_ps5_init_callback(void *arg) {
         set_conf->conf0 = 0x02;
         set_conf->cmd = 0x03;
         set_conf->conf1 = 0x04;
-        set_conf->leds = hw_config.ps_ctrl_colors[device->ids.out_idx];
+        set_conf->leds = ps_ctrl_color_get(device->ids.out_idx);
 
         struct bt_hidp_ps5_set_conf ps5_clear_led = {
             .conf0 = 0x02,
@@ -133,7 +133,7 @@ static void bt_hid_ps5_init_callback(void *arg) {
             .conf0 = 0x02,
             .conf1 = 0x04,
         };
-        ps5_set_led.leds = hw_config.ps_ctrl_colors[device->ids.out_idx];
+        ps5_set_led.leds = ps_ctrl_color_get(device->ids.out_idx);
         printf("# %s\n", __FUNCTION__);
 
         bt_hid_cmd_ps5_set_conf(device, (void *)&ps5_clear_led);
@@ -186,7 +186,7 @@ void bt_hid_ps_init(struct bt_dev *device) {
     /* Init output data for Rumble/LED feedback */
     set_conf->conf0 = 0xc4;
     set_conf->conf1 = 0x03;
-    set_conf->leds = hw_config.ps_ctrl_colors[bt_data->base.pids->out_idx];
+    set_conf->leds = ps_ctrl_color_get(bt_data->base.pids->out_idx);
 
     switch (device->ids.subtype) {
         case BT_PS5_DS:
@@ -203,7 +203,7 @@ void bt_hid_ps_init(struct bt_dev *device) {
                 .conf0 = 0xc0,
                 .conf1 = 0x07,
             };
-            ps4_set_conf.leds = hw_config.ps_ctrl_colors[device->ids.out_idx];
+            ps4_set_conf.leds = ps_ctrl_color_get(device->ids.out_idx);
 
             printf("# %s\n", __FUNCTION__);
 

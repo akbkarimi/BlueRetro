@@ -484,11 +484,13 @@ bool adapter_bridge_fb(struct raw_fb *fb_data, struct bt_data *bt_data) {
     return ret;
 }
 
-void IRAM_ATTR adapter_q_fb(struct raw_fb *fb_data) {
-    /* Best efford only on fb */
-    if (!rumble_mute) {
-        queue_bss_enqueue(wired_adapter.input_q_hdl, (uint8_t *)fb_data, sizeof(*fb_data));
+int32_t IRAM_ATTR adapter_q_fb(struct raw_fb *fb_data) {
+    /* Best effort only on feedback */
+    if (rumble_mute) {
+        return -1;
     }
+
+    return queue_bss_enqueue(wired_adapter.input_q_hdl, (uint8_t *)fb_data, sizeof(*fb_data));
 }
 
 void adapter_toggle_fb(uint32_t wired_id, uint32_t duration_us, uint8_t lf_pwr, uint8_t hf_pwr) {

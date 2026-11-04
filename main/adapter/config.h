@@ -101,6 +101,9 @@ struct hw_config {
 extern struct config config;
 extern struct hw_config hw_config;
 
+/* Selected PS4/PS5 lightbar color. */
+uint32_t ps_ctrl_color_get(int32_t out_idx);
+
 void config_set_rst_bare_core(bool value);
 void hw_config_patch(void);
 void config_init(uint32_t src);

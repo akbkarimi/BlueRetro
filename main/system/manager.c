@@ -332,6 +332,12 @@ static void wired_port_hdl(void) {
     uint16_t port_mask = 0;
     uint8_t err_led_set = 0;
     uint8_t pads_ready = 0;
+#ifdef CONFIG_BLUERETRO_HW2
+    static uint32_t last_pad_color_generation;
+    uint32_t pad_color_generation = ui_pad_color_generation();
+    uint8_t pad_color_changed = (pad_color_generation != last_pad_color_generation);
+    uint8_t pad_color_refresh_ok = 1;
+#endif
 
     for (int32_t i = 0, j = 0, idx = 0; i < BT_MAX_DEV; i++) {
         struct bt_dev *device = NULL;
@@ -386,20 +392,33 @@ static void wired_port_hdl(void) {
         }
 
 #ifdef CONFIG_BLUERETRO_HW2
-        if (device->ids.out_idx != prev_idx) {
+        uint8_t map_changed = (device->ids.out_idx != prev_idx);
+
+        if (map_changed) {
             update++;
             printf("# %s: BTDEV %ld map to WIRED %ld\n", __FUNCTION__, i, device->ids.out_idx);
-            if (bt_ready) {
-                struct raw_fb fb_data = {0};
+        }
 
-                fb_data.header.wired_id = device->ids.out_idx;
-                fb_data.header.type = FB_TYPE_PLAYER_LED;
-                fb_data.header.data_len = 0;
-                adapter_q_fb(&fb_data);
+        if (bt_ready && (map_changed || pad_color_changed)) {
+            struct raw_fb fb_data = {0};
+            int32_t fb_ret;
+
+            fb_data.header.wired_id = device->ids.out_idx;
+            fb_data.header.type = FB_TYPE_PLAYER_LED;
+            fb_data.header.data_len = 0;
+            fb_ret = adapter_q_fb(&fb_data);
+
+            if (pad_color_changed && fb_ret != 0) {
+                pad_color_refresh_ok = 0;
             }
         }
 #endif
     }
+#ifdef CONFIG_BLUERETRO_HW2
+    if (pad_color_changed && pad_color_refresh_ok) {
+        last_pad_color_generation = pad_color_generation;
+    }
+#endif
     {
         static uint8_t last_pads = 0xFF;
 

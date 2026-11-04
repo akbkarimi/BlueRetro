@@ -16,6 +16,7 @@
 #include "adapter/gameid.h"
 #include "bluetooth/mon.h"
 #include "system/manager.h"
+#include "system/ui.h"
 
 struct config config;
 struct hw_config hw_config = {
@@ -522,4 +523,22 @@ void config_debug_log(void) {
         bt_mon_log(true, "Mapping config #0");
         bt_mon_tx(BT_MON_SYS_NOTE, (uint8_t *)config.in_cfg[0].map_cfg,
             config.in_cfg[0].map_size * sizeof(config.in_cfg[0].map_cfg[0]));
+}
+
+
+uint32_t ps_ctrl_color_get(int32_t out_idx)
+{
+    uint32_t rgb;
+
+    if (out_idx < 0 ||
+        out_idx >= (int32_t)(sizeof(hw_config.ps_ctrl_colors) /
+                             sizeof(hw_config.ps_ctrl_colors[0]))) {
+        return 0;
+    }
+
+    if (ui_pad_color_get(&rgb)) {
+        return rgb;
+    }
+
+    return hw_config.ps_ctrl_colors[out_idx];
 }

@@ -19,6 +19,7 @@
 #include "adapter/gameid.h"
 #include "system/manager.h"
 #include "system/fs.h"
+#include "system/mx_config.h"
 
 #define ATT_MAX_LEN 512
 #define BR_ABI_VER 2
@@ -81,7 +82,11 @@ enum {
     BR_MC_DATA_CHRC_HDL,
     BR_BD_ADDR_ATT_HDL,
     BR_BD_ADDR_CHRC_HDL, /* Deprecated, use BR_CFG_CMD_CHRC_HDL */
-    LAST_HDL = BR_BD_ADDR_CHRC_HDL,
+    BR_MX_CFG_CTRL_ATT_HDL,
+    BR_MX_CFG_CTRL_CHRC_HDL,
+    BR_MX_CFG_DATA_ATT_HDL,
+    BR_MX_CFG_DATA_CHRC_HDL,
+    LAST_HDL = BR_MX_CFG_DATA_CHRC_HDL,
     MAX_HDL,
 };
 
@@ -95,6 +100,13 @@ static uint16_t in_cfg_offset = 0;
 static uint16_t in_cfg_id = 0;
 static uint32_t mc_offset = 0;
 static uint8_t cfg_cmd = 0;
+
+/* MX Config BLE state */
+static uint8_t mx_cfg_selected_slot = MX_SLOT_AUDIO;
+static uint8_t mx_cfg_stage[ATT_MAX_LEN];
+static uint16_t mx_cfg_stage_len = 0;
+static uint8_t mx_cfg_stage_active = 0;
+static uint8_t mx_cfg_stage_slot = MX_SLOT_AUDIO;
 static DIR *d = NULL;
 static struct dirent *dir = NULL;
 
@@ -179,6 +191,7 @@ static void bt_att_cmd_blueretro_char_read_type_rsp(uint16_t handle, uint16_t st
         case BR_IN_CFG_CTRL_CHRC_HDL:
         case BR_OTA_FW_DATA_CHRC_HDL:
         case BR_MC_CTRL_CHRC_HDL:
+        case BR_MX_CFG_CTRL_CHRC_HDL:
             *data++ = BT_GATT_CHRC_WRITE;
             break;
         default:
@@ -280,6 +293,38 @@ static void bt_att_cmd_in_cfg_rd_rsp(uint16_t handle, uint16_t offset) {
     }
 
     bt_att_cmd(handle, offset ? BT_ATT_OP_READ_BLOB_RSP : BT_ATT_OP_READ_RSP, len);
+}
+
+static void bt_att_cmd_mx_cfg_rd_rsp(uint16_t handle, uint16_t offset) {
+    uint8_t buffer[ATT_MAX_LEN];
+    uint32_t total_len;
+    uint32_t len;
+
+    printf("# %s offset: %u\n", __FUNCTION__, offset);
+
+    total_len = mx_config_read_blob(buffer, sizeof(buffer));
+
+    if (offset > total_len) {
+        bt_att_cmd_error_rsp(handle,
+            offset ? BT_ATT_OP_READ_BLOB_REQ : BT_ATT_OP_READ_REQ,
+            BR_MX_CFG_DATA_CHRC_HDL,
+            BT_ATT_ERR_INVALID_OFFSET);
+        return;
+    }
+
+    len = total_len - offset;
+
+    if (len > (uint32_t)(mtu - 1)) {
+        len = mtu - 1;
+    }
+
+    if (len > 0) {
+        memcpy(bt_hci_pkt_tmp.att_data, buffer + offset, len);
+    }
+
+    bt_att_cmd(handle,
+        offset ? BT_ATT_OP_READ_BLOB_RSP : BT_ATT_OP_READ_RSP,
+        len);
 }
 
 static void bt_att_cmd_mc_rd_rsp(uint16_t handle, uint8_t blob) {
@@ -670,6 +715,9 @@ void bt_att_cfg_hdlr(struct bt_dev *device, struct bt_hci_pkt *bt_hci_acl_pkt, u
                 case BR_BD_ADDR_CHRC_HDL:
                     bt_att_cfg_cmd_bdaddr_rsp(device->acl_handle);
                     break;
+                case BR_MX_CFG_DATA_CHRC_HDL:
+                    bt_att_cmd_mx_cfg_rd_rsp(device->acl_handle, 0);
+                    break;
                 case BR_CFG_CMD_CHRC_HDL:
                     if (!atomic_test_bit(&device->flags, BT_DEV_PPCP_DONE)) {
                         struct hci_cp_le_conn_update le_conn_update = {
@@ -709,6 +757,9 @@ void bt_att_cfg_hdlr(struct bt_dev *device, struct bt_hci_pkt *bt_hci_acl_pkt, u
                 case BR_IN_CFG_DATA_CHRC_HDL:
                     bt_att_cmd_in_cfg_rd_rsp(device->acl_handle, rd_blob_req->offset);
                     break;
+                case BR_MX_CFG_DATA_CHRC_HDL:
+                    bt_att_cmd_mx_cfg_rd_rsp(device->acl_handle, rd_blob_req->offset);
+                    break;
                 case BR_MC_DATA_CHRC_HDL:
                     bt_att_cmd_mc_rd_rsp(device->acl_handle, 1);
                     break;
@@ -734,7 +785,16 @@ void bt_att_cfg_hdlr(struct bt_dev *device, struct bt_hci_pkt *bt_hci_acl_pkt, u
         {
             struct bt_att_write_req *wr_req = (struct bt_att_write_req *)bt_hci_acl_pkt->att_data;
             uint16_t *data = (uint16_t *)wr_req->value;
-            uint32_t att_len = len - (BT_HCI_H4_HDR_SIZE + BT_HCI_ACL_HDR_SIZE + sizeof(struct bt_l2cap_hdr) + sizeof(struct bt_att_hdr));
+            const uint32_t att_hdr_len = BT_HCI_H4_HDR_SIZE + BT_HCI_ACL_HDR_SIZE + sizeof(struct bt_l2cap_hdr) + sizeof(struct bt_att_hdr);
+
+            if (len < att_hdr_len + sizeof(wr_req->handle)) {
+                bt_att_cmd_error_rsp(device->acl_handle,
+                    BT_ATT_OP_WRITE_REQ, 0,
+                    BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+                break;
+            }
+
+            uint32_t att_len = len - att_hdr_len;
             uint32_t data_len = att_len - sizeof(wr_req->handle);
 
             /* Disable debug tracing */
@@ -769,6 +829,53 @@ void bt_att_cfg_hdlr(struct bt_dev *device, struct bt_hci_pkt *bt_hci_acl_pkt, u
                     in_cfg_offset = *data;
                     bt_att_cmd_wr_rsp(device->acl_handle);
                     break;
+                case BR_MX_CFG_CTRL_CHRC_HDL:
+                    if (mx_cfg_stage_active) {
+                        bt_att_cmd_error_rsp(device->acl_handle,
+                            BT_ATT_OP_WRITE_REQ, wr_req->handle,
+                            BT_ATT_ERR_UNLIKELY);
+                    }
+                    else if (att_len < sizeof(wr_req->handle) ||
+                        data_len != 1) {
+                        bt_att_cmd_error_rsp(device->acl_handle,
+                            BT_ATT_OP_WRITE_REQ, wr_req->handle,
+                            BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+                    }
+                    else if (wr_req->value[0] >= MX_SLOT_LAST ||
+                             wr_req->value[0] == MX_SLOT_PAGES) {
+                        bt_att_cmd_error_rsp(device->acl_handle,
+                            BT_ATT_OP_WRITE_REQ, wr_req->handle,
+                            BT_ATT_ERR_UNLIKELY);
+                    }
+                    else {
+                        mx_cfg_selected_slot = wr_req->value[0];
+                        mx_config_select_slot(mx_cfg_selected_slot);
+                        bt_att_cmd_wr_rsp(device->acl_handle);
+                    }
+                    break;
+
+                case BR_MX_CFG_DATA_CHRC_HDL:
+                    if (mx_cfg_stage_active) {
+                        bt_att_cmd_error_rsp(device->acl_handle,
+                            BT_ATT_OP_WRITE_REQ, wr_req->handle,
+                            BT_ATT_ERR_UNLIKELY);
+                    }
+                    else if (att_len < sizeof(wr_req->handle)) {
+                        bt_att_cmd_error_rsp(device->acl_handle,
+                            BT_ATT_OP_WRITE_REQ, wr_req->handle,
+                            BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+                    }
+                    else if (mx_config_write_blob(wr_req->value,
+                                                   data_len) == 0) {
+                        bt_att_cmd_wr_rsp(device->acl_handle);
+                    }
+                    else {
+                        bt_att_cmd_error_rsp(device->acl_handle,
+                            BT_ATT_OP_WRITE_REQ, wr_req->handle,
+                            BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+                    }
+                    break;
+
                 case BR_CFG_CMD_CHRC_HDL:
                     bt_att_cfg_cmd_wr_hdlr(device, wr_req->value, data_len);
                     break;
@@ -794,10 +901,73 @@ void bt_att_cfg_hdlr(struct bt_dev *device, struct bt_hci_pkt *bt_hci_acl_pkt, u
         case BT_ATT_OP_PREPARE_WRITE_REQ:
         {
             struct bt_att_prepare_write_req *prep_wr_req = (struct bt_att_prepare_write_req *)bt_hci_acl_pkt->att_data;
-            uint32_t att_len = len - (BT_HCI_H4_HDR_SIZE + BT_HCI_ACL_HDR_SIZE + sizeof(struct bt_l2cap_hdr) + sizeof(struct bt_att_hdr));
+            const uint32_t att_hdr_len = BT_HCI_H4_HDR_SIZE + BT_HCI_ACL_HDR_SIZE + sizeof(struct bt_l2cap_hdr) + sizeof(struct bt_att_hdr);
+
+            if (len < att_hdr_len + sizeof(prep_wr_req->handle) + sizeof(prep_wr_req->offset)) {
+                bt_att_cmd_error_rsp(device->acl_handle,
+                    BT_ATT_OP_PREPARE_WRITE_REQ, 0,
+                    BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+                break;
+            }
+
+            uint32_t att_len = len - att_hdr_len;
             uint32_t data_len = att_len - (sizeof(prep_wr_req->handle) + sizeof(prep_wr_req->offset));
             printf("# BT_ATT_OP_PREPARE_WRITE_REQ len: %ld offset: %d\n", data_len, prep_wr_req->offset);
-            switch (prep_wr_req->handle) {
+            if (mx_cfg_stage_active &&
+                prep_wr_req->handle != BR_MX_CFG_DATA_CHRC_HDL) {
+                bt_att_cmd_error_rsp(device->acl_handle,
+                    BT_ATT_OP_PREPARE_WRITE_REQ,
+                    prep_wr_req->handle,
+                    BT_ATT_ERR_UNLIKELY);
+            }
+            else {
+                switch (prep_wr_req->handle) {
+                case BR_MX_CFG_DATA_CHRC_HDL:
+                    if (data_len == 0 ||
+                        data_len > ATT_MAX_LEN ||
+                        prep_wr_req->offset > ATT_MAX_LEN ||
+                        data_len > ATT_MAX_LEN - prep_wr_req->offset) {
+                        mx_cfg_stage_active = 0;
+                        mx_cfg_stage_len = 0;
+                        bt_att_cmd_error_rsp(device->acl_handle,
+                            BT_ATT_OP_PREPARE_WRITE_REQ,
+                            prep_wr_req->handle,
+                            BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+                    }
+                    else if (!mx_cfg_stage_active) {
+                        if (prep_wr_req->offset != 0) {
+                            bt_att_cmd_error_rsp(device->acl_handle,
+                                BT_ATT_OP_PREPARE_WRITE_REQ,
+                                prep_wr_req->handle,
+                                BT_ATT_ERR_INVALID_OFFSET);
+                        }
+                        else {
+                            mx_cfg_stage_active = 1;
+                            mx_cfg_stage_slot = mx_cfg_selected_slot;
+                            mx_cfg_stage_len = data_len;
+                            memcpy(mx_cfg_stage, prep_wr_req->value, data_len);
+                            bt_att_cmd_prep_wr_rsp(device->acl_handle,
+                                bt_hci_acl_pkt->att_data, att_len);
+                        }
+                    }
+                    else if (mx_cfg_stage_slot != mx_cfg_selected_slot ||
+                             prep_wr_req->offset != mx_cfg_stage_len) {
+                        mx_cfg_stage_active = 0;
+                        mx_cfg_stage_len = 0;
+                        bt_att_cmd_error_rsp(device->acl_handle,
+                            BT_ATT_OP_PREPARE_WRITE_REQ,
+                            prep_wr_req->handle,
+                            BT_ATT_ERR_INVALID_OFFSET);
+                    }
+                    else {
+                        memcpy(mx_cfg_stage + mx_cfg_stage_len,
+                               prep_wr_req->value, data_len);
+                        mx_cfg_stage_len += data_len;
+                        bt_att_cmd_prep_wr_rsp(device->acl_handle,
+                            bt_hci_acl_pkt->att_data, att_len);
+                    }
+                    break;
+
                 case BR_IN_CFG_DATA_CHRC_HDL:
                     memcpy((void *)&config.in_cfg[in_cfg_id] + in_cfg_offset + prep_wr_req->offset, prep_wr_req->value, data_len);
                     bt_att_cmd_prep_wr_rsp(device->acl_handle, bt_hci_acl_pkt->att_data, att_len);
@@ -814,17 +984,68 @@ void bt_att_cfg_hdlr(struct bt_dev *device, struct bt_hci_pkt *bt_hci_acl_pkt, u
                 default:
                     bt_att_cmd_error_rsp(device->acl_handle, BT_ATT_OP_PREPARE_WRITE_REQ, prep_wr_req->handle, BT_ATT_ERR_INVALID_HANDLE);
                     break;
+                }
             }
             break;
         }
         case BT_ATT_OP_EXEC_WRITE_REQ:
         {
             struct bt_att_exec_write_req *exec_wr_req = (struct bt_att_exec_write_req *)bt_hci_acl_pkt->att_data;
-            printf("# BT_ATT_OP_EXEC_WRITE_REQ\n");
-            if (!ota_hdl && exec_wr_req->flags == BT_ATT_FLAG_EXEC) {
-                config_update(config_get_src());
+            const uint32_t att_hdr_len = BT_HCI_H4_HDR_SIZE + BT_HCI_ACL_HDR_SIZE + sizeof(struct bt_l2cap_hdr) + sizeof(struct bt_att_hdr);
+
+            if (len < att_hdr_len + sizeof(*exec_wr_req)) {
+                if (mx_cfg_stage_active) {
+                    mx_cfg_stage_active = 0;
+                    mx_cfg_stage_len = 0;
+                }
+                bt_att_cmd_error_rsp(device->acl_handle,
+                    BT_ATT_OP_EXEC_WRITE_REQ, 0,
+                    BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+                break;
             }
-            bt_att_cmd_exec_wr_rsp(device->acl_handle);
+
+            printf("# BT_ATT_OP_EXEC_WRITE_REQ\n");
+
+            if (mx_cfg_stage_active) {
+                if (exec_wr_req->flags == BT_ATT_FLAG_CANCEL) {
+                    mx_cfg_stage_active = 0;
+                    mx_cfg_stage_len = 0;
+                    bt_att_cmd_exec_wr_rsp(device->acl_handle);
+                }
+                else if (exec_wr_req->flags == BT_ATT_FLAG_EXEC) {
+                    mx_config_select_slot(mx_cfg_stage_slot);
+
+                    if (mx_config_write_blob(mx_cfg_stage,
+                                             mx_cfg_stage_len) == 0) {
+                        mx_cfg_selected_slot = mx_cfg_stage_slot;
+                        mx_cfg_stage_active = 0;
+                        mx_cfg_stage_len = 0;
+                        bt_att_cmd_exec_wr_rsp(device->acl_handle);
+                    }
+                    else {
+                        mx_cfg_stage_active = 0;
+                        mx_cfg_stage_len = 0;
+                        bt_att_cmd_error_rsp(device->acl_handle,
+                            BT_ATT_OP_EXEC_WRITE_REQ,
+                            BR_MX_CFG_DATA_CHRC_HDL,
+                            BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+                    }
+                }
+                else {
+                    mx_cfg_stage_active = 0;
+                    mx_cfg_stage_len = 0;
+                    bt_att_cmd_error_rsp(device->acl_handle,
+                        BT_ATT_OP_EXEC_WRITE_REQ,
+                        BR_MX_CFG_DATA_CHRC_HDL,
+                        BT_ATT_ERR_UNLIKELY);
+                }
+            }
+            else {
+                if (!ota_hdl && exec_wr_req->flags == BT_ATT_FLAG_EXEC) {
+                    config_update(config_get_src());
+                }
+                bt_att_cmd_exec_wr_rsp(device->acl_handle);
+            }
             break;
         }
         default:
